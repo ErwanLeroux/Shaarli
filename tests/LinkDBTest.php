@@ -17,8 +17,20 @@ class LinkDBTest extends PHPUnit_Framework_TestCase
 {
     // datastore to test write operations
     protected static $testDatastore = 'sandbox/datastore.php';
+
+    /**
+     * @var ReferenceLinkDB instance.
+     */
     protected static $refDB = null;
+
+    /**
+     * @var LinkDB public LinkDB instance.
+     */
     protected static $publicLinkDB = null;
+
+    /**
+     * @var LinkDB private LinkDB instance.
+     */
     protected static $privateLinkDB = null;
 
     /**
@@ -89,7 +101,7 @@ class LinkDBTest extends PHPUnit_Framework_TestCase
      * Attempt to instantiate a LinkDB whereas the datastore is not writable
      *
      * @expectedException              IOException
-     * @expectedExceptionMessageRegExp /Error accessing null/
+     * @expectedExceptionMessageRegExp /Error accessing "null"/
      */
     public function testConstructDatastoreNotWriteable()
     {
@@ -105,7 +117,7 @@ class LinkDBTest extends PHPUnit_Framework_TestCase
         unlink(self::$testDatastore);
         $this->assertFileNotExists(self::$testDatastore);
 
-        $checkDB = self::getMethod('_checkDB');
+        $checkDB = self::getMethod('check');
         $checkDB->invokeArgs($linkDB, array());
         $this->assertFileExists(self::$testDatastore);
 
@@ -122,7 +134,7 @@ class LinkDBTest extends PHPUnit_Framework_TestCase
         $datastoreSize = filesize(self::$testDatastore);
         $this->assertGreaterThan(0, $datastoreSize);
 
-        $checkDB = self::getMethod('_checkDB');
+        $checkDB = self::getMethod('check');
         $checkDB->invokeArgs($linkDB, array());
 
         // ensure the datastore is left unmodified
@@ -168,21 +180,22 @@ class LinkDBTest extends PHPUnit_Framework_TestCase
     /**
      * Save the links to the DB
      */
-    public function testSaveDB()
+    public function testSave()
     {
         $testDB = new LinkDB(self::$testDatastore, true, false);
         $dbSize = sizeof($testDB);
 
         $link = array(
+            'id' => 42,
             'title'=>'an additional link',
             'url'=>'http://dum.my',
             'description'=>'One more',
             'private'=>0,
-            'linkdate'=>'20150518_190000',
+            'created'=> DateTime::createFromFormat(LinkDB::LINK_DATE_FORMAT, '20150518_190000'),
             'tags'=>'unit test'
         );
-        $testDB[$link['linkdate']] = $link;
-        $testDB->savedb('tests');
+        $testDB[$link['id']] = $link;
+        $testDB->save('tests');
 
         $testDB = new LinkDB(self::$testDatastore, true, false);
         $this->assertEquals($dbSize + 1, sizeof($testDB));
@@ -226,12 +239,12 @@ class LinkDBTest extends PHPUnit_Framework_TestCase
     public function testDays()
     {
         $this->assertEquals(
-            array('20121206', '20130614', '20150310'),
+            array('20100310', '20121206', '20130614', '20150310'),
             self::$publicLinkDB->days()
         );
 
         $this->assertEquals(
-            array('20121206', '20130614', '20141125', '20150310'),
+            array('20100310', '20121206', '20130614', '20141125', '20150310'),
             self::$privateLinkDB->days()
         );
     }
@@ -244,7 +257,7 @@ class LinkDBTest extends PHPUnit_Framework_TestCase
         $link = self::$publicLinkDB->getLinkFromUrl('http://mediagoblin.org/');
 
         $this->assertNotEquals(false, $link);
-        $this->assertEquals(
+        $this->assertContains(
             'A free software media publishing platform',
             $link['description']
         );
@@ -276,9 +289,15 @@ class LinkDBTest extends PHPUnit_Framework_TestCase
                 'media' => 1,
                 'software' => 1,
                 'stallman' => 1,
-                'free' => 1
+                'free' => 1,
+                '-exclude' => 1,
+                'hashtag' => 2,
+                // The DB contains a link with `sTuff` and another one with `stuff` tag.
+                // They need to be grouped with the first case found - order by date DESC: `sTuff`.
+                'sTuff' => 2,
+                'ut' => 1,
             ),
-            self::$publicLinkDB->allTags()
+            self::$publicLinkDB->linksCountPerTag()
         );
 
         $this->assertEquals(
@@ -295,220 +314,45 @@ class LinkDBTest extends PHPUnit_Framework_TestCase
                 'html' => 1,
                 'w3c' => 1,
                 'css' => 1,
-                'Mercurial' => 1
+                'Mercurial' => 1,
+                'sTuff' => 2,
+                '-exclude' => 1,
+                '.hidden' => 1,
+                'hashtag' => 2,
+                'tag1' => 1,
+                'tag2' => 1,
+                'tag3' => 1,
+                'tag4' => 1,
+                'ut' => 1,
             ),
-            self::$privateLinkDB->allTags()
-        );
-    }
-
-    /**
-     * Filter links using a tag
-     */
-    public function testFilterOneTag()
-    {
-        $this->assertEquals(
-            3,
-            sizeof(self::$publicLinkDB->filterTags('web', false))
-        );
-
-        $this->assertEquals(
-            4,
-            sizeof(self::$privateLinkDB->filterTags('web', false))
-        );
-    }
-
-    /**
-     * Filter links using a tag - case-sensitive
-     */
-    public function testFilterCaseSensitiveTag()
-    {
-        $this->assertEquals(
-            0,
-            sizeof(self::$privateLinkDB->filterTags('mercurial', true))
-        );
-
-        $this->assertEquals(
-            1,
-            sizeof(self::$privateLinkDB->filterTags('Mercurial', true))
-        );
-    }
-
-    /**
-     * Filter links using a tag combination
-     */
-    public function testFilterMultipleTags()
-    {
-        $this->assertEquals(
-            1,
-            sizeof(self::$publicLinkDB->filterTags('dev cartoon', false))
-        );
-
-        $this->assertEquals(
-            2,
-            sizeof(self::$privateLinkDB->filterTags('dev cartoon', false))
-        );
-    }
-
-    /**
-     * Filter links using a non-existent tag
-     */
-    public function testFilterUnknownTag()
-    {
-        $this->assertEquals(
-            0,
-            sizeof(self::$publicLinkDB->filterTags('null', false))
-        );
-    }
-
-    /**
-     * Return links for a given day
-     */
-    public function testFilterDay()
-    {
-        $this->assertEquals(
-            2,
-            sizeof(self::$publicLinkDB->filterDay('20121206'))
-        );
-
-        $this->assertEquals(
-            3,
-            sizeof(self::$privateLinkDB->filterDay('20121206'))
-        );
-    }
-
-    /**
-     * 404 - day not found
-     */
-    public function testFilterUnknownDay()
-    {
-        $this->assertEquals(
-            0,
-            sizeof(self::$publicLinkDB->filterDay('19700101'))
-        );
-
-        $this->assertEquals(
-            0,
-            sizeof(self::$privateLinkDB->filterDay('19700101'))
-        );
-    }
-
-    /**
-     * Use an invalid date format
-     * @expectedException              Exception
-     * @expectedExceptionMessageRegExp /Invalid date format/
-     */
-    public function testFilterInvalidDayWithChars()
-    {
-        self::$privateLinkDB->filterDay('Rainy day, dream away');
-    }
-
-    /**
-     * Use an invalid date format
-     * @expectedException              Exception
-     * @expectedExceptionMessageRegExp /Invalid date format/
-     */
-    public function testFilterInvalidDayDigits()
-    {
-        self::$privateLinkDB->filterDay('20');
-    }
-
-    /**
-     * Retrieve a link entry with its hash
-     */
-    public function testFilterSmallHash()
-    {
-        $links = self::$privateLinkDB->filterSmallHash('IuWvgA');
-
-        $this->assertEquals(
-            1,
-            sizeof($links)
-        );
-
-        $this->assertEquals(
-            'MediaGoblin',
-            $links['20130614_184135']['title']
-        );
-        
-    }
-
-    /**
-     * No link for this hash
-     */
-    public function testFilterUnknownSmallHash()
-    {
-        $this->assertEquals(
-            0,
-            sizeof(self::$privateLinkDB->filterSmallHash('Iblaah'))
-        );
-    }
-
-    /**
-     * Full-text search - result from a link's URL
-     */
-    public function testFilterFullTextURL()
-    {
-        $this->assertEquals(
-            2,
-            sizeof(self::$publicLinkDB->filterFullText('ars.userfriendly.org'))
-        );
-    }
-
-    /**
-     * Full-text search - result from a link's title only
-     */
-    public function testFilterFullTextTitle()
-    {
-        // use miscellaneous cases
-        $this->assertEquals(
-            2,
-            sizeof(self::$publicLinkDB->filterFullText('userfriendly -'))
+            self::$privateLinkDB->linksCountPerTag()
         );
         $this->assertEquals(
-            2,
-            sizeof(self::$publicLinkDB->filterFullText('UserFriendly -'))
+            array(
+                'web' => 4,
+                'cartoon' => 2,
+                'gnu' => 1,
+                'dev' => 1,
+                'samba' => 1,
+                'media' => 1,
+                'html' => 1,
+                'w3c' => 1,
+                'css' => 1,
+                'Mercurial' => 1,
+                '.hidden' => 1,
+                'hashtag' => 1,
+            ),
+            self::$privateLinkDB->linksCountPerTag(['web'])
         );
         $this->assertEquals(
-            2,
-            sizeof(self::$publicLinkDB->filterFullText('uSeRFrIendlY -'))
-        );
-
-        // use miscellaneous case and offset
-        $this->assertEquals(
-            2,
-            sizeof(self::$publicLinkDB->filterFullText('RFrIendL'))
-        );
-    }
-
-    /**
-     * Full-text search - result from the link's description only
-     */
-    public function testFilterFullTextDescription()
-    {
-        $this->assertEquals(
-            1,
-            sizeof(self::$publicLinkDB->filterFullText('media publishing'))
-        );
-    }
-
-    /**
-     * Full-text search - result from the link's tags only
-     */
-    public function testFilterFullTextTags()
-    {
-        $this->assertEquals(
-            2,
-            sizeof(self::$publicLinkDB->filterFullText('gnu'))
-        );
-    }
-
-    /**
-     * Full-text search - result set from mixed sources
-     */
-    public function testFilterFullTextMixed()
-    {
-        $this->assertEquals(
-            2,
-            sizeof(self::$publicLinkDB->filterFullText('free software'))
+            array(
+                'web' => 1,
+                'html' => 1,
+                'w3c' => 1,
+                'css' => 1,
+                'Mercurial' => 1,
+            ),
+            self::$privateLinkDB->linksCountPerTag(['web'], 'private')
         );
     }
 
@@ -532,6 +376,170 @@ class LinkDBTest extends PHPUnit_Framework_TestCase
         $db = new LinkDB(self::$testDatastore, false, false, $redirector);
         foreach($db as $link) {
             $this->assertStringStartsWith($redirector, $link['real_url']);
+            $this->assertNotFalse(strpos($link['real_url'], urlencode('://')));
         }
+
+        $db = new LinkDB(self::$testDatastore, false, false, $redirector, false);
+        foreach($db as $link) {
+            $this->assertStringStartsWith($redirector, $link['real_url']);
+            $this->assertFalse(strpos($link['real_url'], urlencode('://')));
+        }
+    }
+
+    /**
+     * Test filter with string.
+     */
+    public function testFilterString()
+    {
+        $tags = 'dev cartoon';
+        $request = array('searchtags' => $tags);
+        $this->assertEquals(
+            2,
+            count(self::$privateLinkDB->filterSearch($request, true, false))
+        );
+    }
+
+    /**
+     * Test filter with string.
+     */
+    public function testFilterArray()
+    {
+        $tags = array('dev', 'cartoon');
+        $request = array('searchtags' => $tags);
+        $this->assertEquals(
+            2,
+            count(self::$privateLinkDB->filterSearch($request, true, false))
+        );
+    }
+
+    /**
+     * Test hidden tags feature:
+     *  tags starting with a dot '.' are only visible when logged in.
+     */
+    public function testHiddenTags()
+    {
+        $tags = '.hidden';
+        $request = array('searchtags' => $tags);
+        $this->assertEquals(
+            1,
+            count(self::$privateLinkDB->filterSearch($request, true, false))
+        );
+
+        $this->assertEquals(
+            0,
+            count(self::$publicLinkDB->filterSearch($request, true, false))
+        );
+    }
+
+    /**
+     * Test filterHash() with a valid smallhash.
+     */
+    public function testFilterHashValid()
+    {
+        $request = smallHash('20150310_114651');
+        $this->assertEquals(
+            1,
+            count(self::$publicLinkDB->filterHash($request))
+        );
+        $request = smallHash('20150310_114633' . 8);
+        $this->assertEquals(
+            1,
+            count(self::$publicLinkDB->filterHash($request))
+        );
+    }
+
+    /**
+     * Test filterHash() with an invalid smallhash.
+     *
+     * @expectedException LinkNotFoundException
+     */
+    public function testFilterHashInValid1()
+    {
+        $request = 'blabla';
+        self::$publicLinkDB->filterHash($request);
+    }
+
+    /**
+     * Test filterHash() with an empty smallhash.
+     *
+     * @expectedException LinkNotFoundException
+     */
+    public function testFilterHashInValid()
+    {
+        self::$publicLinkDB->filterHash('');
+    }
+
+    /**
+     * Test reorder with asc/desc parameter.
+     */
+    public function testReorderLinksDesc()
+    {
+        self::$privateLinkDB->reorder('ASC');
+        $linkIds = array(42, 4, 9, 1, 0, 7, 6, 8, 41);
+        $cpt = 0;
+        foreach (self::$privateLinkDB as $key => $value) {
+            $this->assertEquals($linkIds[$cpt++], $key);
+        }
+        self::$privateLinkDB->reorder('DESC');
+        $linkIds = array_reverse($linkIds);
+        $cpt = 0;
+        foreach (self::$privateLinkDB as $key => $value) {
+            $this->assertEquals($linkIds[$cpt++], $key);
+        }
+    }
+
+    /**
+     * Test rename tag with a valid value present in multiple links
+     */
+    public function testRenameTagMultiple()
+    {
+        self::$refDB->write(self::$testDatastore);
+        $linkDB = new LinkDB(self::$testDatastore, true, false);
+
+        $res = $linkDB->renameTag('cartoon', 'Taz');
+        $this->assertEquals(3, count($res));
+        $this->assertContains(' Taz ', $linkDB[4]['tags']);
+        $this->assertContains(' Taz ', $linkDB[1]['tags']);
+        $this->assertContains(' Taz ', $linkDB[0]['tags']);
+    }
+
+    /**
+     * Test rename tag with a valid value
+     */
+    public function testRenameTagCaseSensitive()
+    {
+        self::$refDB->write(self::$testDatastore);
+        $linkDB = new LinkDB(self::$testDatastore, true, false, '');
+
+        $res = $linkDB->renameTag('sTuff', 'Taz');
+        $this->assertEquals(1, count($res));
+        $this->assertEquals('Taz', $linkDB[41]['tags']);
+    }
+
+    /**
+     * Test rename tag with invalid values
+     */
+    public function testRenameTagInvalid()
+    {
+        $linkDB = new LinkDB(self::$testDatastore, false, false);
+
+        $this->assertFalse($linkDB->renameTag('', 'test'));
+        $this->assertFalse($linkDB->renameTag('', ''));
+        // tag non existent
+        $this->assertEquals([], $linkDB->renameTag('test', ''));
+        $this->assertEquals([], $linkDB->renameTag('test', 'retest'));
+    }
+
+    /**
+     * Test delete tag with a valid value
+     */
+    public function testDeleteTag()
+    {
+        self::$refDB->write(self::$testDatastore);
+        $linkDB = new LinkDB(self::$testDatastore, true, false);
+
+        $res = $linkDB->renameTag('cartoon', null);
+        $this->assertEquals(3, count($res));
+        $this->assertNotContains('cartoon', $linkDB[4]['tags']);
     }
 }

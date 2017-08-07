@@ -6,7 +6,7 @@
 require_once 'application/HttpUtils.php';
 
 /**
- * Unitary tests for get_http_url()
+ * Unitary tests for get_http_response()
  */
 class GetHttpUrlTest extends PHPUnit_Framework_TestCase
 {
@@ -15,12 +15,15 @@ class GetHttpUrlTest extends PHPUnit_Framework_TestCase
      */
     public function testGetInvalidLocalUrl()
     {
-        list($headers, $content) = get_http_url('/non/existent', 1);
-        $this->assertEquals('HTTP Error', $headers[0]);
-        $this->assertRegexp(
-            '/failed to open stream: No such file or directory/',
-            $content
-        );
+        // Local
+        list($headers, $content) = get_http_response('/non/existent', 1);
+        $this->assertEquals('Invalid HTTP Url', $headers[0]);
+        $this->assertFalse($content);
+
+        // Non HTTP
+        list($headers, $content) = get_http_response('ftp://save.tld/mysave', 1);
+        $this->assertEquals('Invalid HTTP Url', $headers[0]);
+        $this->assertFalse($content);
     }
 
     /**
@@ -28,11 +31,35 @@ class GetHttpUrlTest extends PHPUnit_Framework_TestCase
      */
     public function testGetInvalidRemoteUrl()
     {
-        list($headers, $content) = get_http_url('http://non.existent', 1);
-        $this->assertEquals('HTTP Error', $headers[0]);
-        $this->assertRegexp(
-            '/Name or service not known/',
-            $content
-        );
+        list($headers, $content) = @get_http_response('http://non.existent', 1);
+        $this->assertFalse($headers);
+        $this->assertFalse($content);
+    }
+
+    /**
+     * Test getAbsoluteUrl with relative target URL.
+     */
+    public function testGetAbsoluteUrlWithRelative()
+    {
+        $origin = 'http://non.existent/blabla/?test';
+        $target = '/stuff.php';
+
+        $expected = 'http://non.existent/stuff.php';
+        $this->assertEquals($expected, getAbsoluteUrl($origin, $target));
+
+        $target = 'stuff.php';
+        $expected = 'http://non.existent/blabla/stuff.php';
+        $this->assertEquals($expected, getAbsoluteUrl($origin, $target));
+    }
+
+    /**
+     * Test getAbsoluteUrl with absolute target URL.
+     */
+    public function testGetAbsoluteUrlWithAbsolute()
+    {
+        $origin = 'http://non.existent/blabla/?test';
+        $target = 'http://other.url/stuff.php';
+
+        $this->assertEquals($target, getAbsoluteUrl($origin, $target));
     }
 }
